@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Drowsiness Dashboard</title>
+    <meta http-equiv="refresh" content="2">
+    <style>
+        body { font-family: Arial, sans-serif; background: #1e1e1e; color: #eee; padding: 30px; }
+        .status { font-size: 28px; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .safe { background: #1b5e20; }
+        .alert { background: #b71c1c; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #444; }
+    </style>
+</head>
+<body>
+    <h1>Driver Monitoring Dashboard</h1>
+    <div class="status {{ 'alert' if status != 'Normal' else 'safe' }}">
+        Current Status: {{ status }}
+    </div>
+    <h2>Event Log</h2>
+    <table>
+        <tr><th>Time</th><th>Event</th></tr>
+        {% for entry in log %}
+        <tr><td>{{ entry.time }}</td><td>{{ entry.event }}</td></tr>
+        {% endfor %}
+    </table>
+</body>
+</html>

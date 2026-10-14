@@ -1,0 +1,20 @@
+# Python & virtual environment
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Large Dataset files (do not commit to git/hosting)
+dataset/
+*.zip
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+
+# Streamlit local credentials
+.streamlit/secrets.toml
