@@ -20,7 +20,7 @@ import streamlit as st
 import torch
 import torch.nn as nn
 from PIL import Image
-from streamlit_webrtc import RTCConfiguration, WebRtcMode, webrtc_streamer
+from streamlit_webrtc import RTCConfiguration, VideoProcessorBase, WebRtcMode, webrtc_streamer
 from torchvision import models, transforms
 
 # ---------------------------------------------------------
@@ -397,7 +397,7 @@ show_hud = st.sidebar.checkbox("Show Telemetry HUD on Video", value=True)
 # ---------------------------------------------------------
 # Video Processor (WebRTC Frame Pipeline)
 # ---------------------------------------------------------
-class DrowsinessVideoProcessor:
+class DrowsinessVideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
@@ -417,8 +417,7 @@ class DrowsinessVideoProcessor:
         self.prev_time = time.time()
         self.frame_count = 0
 
-    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        img = frame.to_ndarray(format="bgr24")
+    def _process_frame(self, img):
         frame_h, frame_w = img.shape[:2]
 
         # Calculate FPS
@@ -601,17 +600,40 @@ class DrowsinessVideoProcessor:
                 shared_state.status = "Normal" if face_detected else "No Face Detected"
                 self.was_alert = False
 
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+        return img
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        try:
+            img = frame.to_ndarray(format="bgr24")
+            processed_img = self._process_frame(img)
+            return av.VideoFrame.from_ndarray(processed_img, format="bgr24")
+        except Exception:
+            return frame
 
 
 # ---------------------------------------------------------
-# WebRTC Configuration (STUN servers for cloud deployment)
+# WebRTC Configuration (STUN & TURN servers for cloud deployment)
 # ---------------------------------------------------------
 RTC_CONFIGURATION = RTCConfiguration({
     "iceServers": [
         {"urls": ["stun:stun.l.google.com:19302"]},
         {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
+        {"urls": ["stun:openrelay.metered.ca:80"]},
+        {
+            "urls": ["turn:openrelay.metered.ca:80"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
+        {
+            "urls": ["turn:openrelay.metered.ca:443"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
+        {
+            "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
+            "username": "openrelayproject",
+            "credential": "openrelayproject",
+        },
     ]
 })
 
@@ -699,18 +721,29 @@ with col_video:
         mode=WebRtcMode.SENDRECV,
         rtc_configuration=RTC_CONFIGURATION,
         video_processor_factory=DrowsinessVideoProcessor,
-        media_stream_constraints={"video": True, "audio": False},
+        media_stream_constraints={
+            "video": {
+                "width": {"ideal": 640},
+                "height": {"ideal": 480},
+            },
+            "audio": False,
+        },
         async_processing=True,
     )
 
-    st.caption("Click **START** to open your webcam stream. Works on mobile, tablet, and desktop.")
+    if webrtc_ctx.state.playing:
+        st.markdown("<span style='color: #3fb950; font-weight: 600;'>🟢 Camera Connected & Live</span>", unsafe_allow_html=True)
+    elif webrtc_ctx.state.signalling:
+        st.markdown("<span style='color: #e3b341; font-weight: 600;'>🟡 Negotiating WebRTC connection... Please allow camera access in browser if prompted.</span>", unsafe_allow_html=True)
+    else:
+        st.caption("Click **START** above to activate your camera. (Ensure camera permission is allowed in your browser).")
 
 
 with col_telemetry:
     st.subheader("📊 Driver Telemetry & Status")
 
-    # Reactive metrics fragment refreshing every 1 second without re-rendering the WebRTC video
-    @st.fragment(run_every=1.0)
+    # Reactive metrics fragment refreshing every 1.5 seconds without re-rendering the WebRTC video
+    @st.fragment(run_every=1.5)
     def render_live_telemetry():
         with shared_state.lock:
             status = shared_state.status
