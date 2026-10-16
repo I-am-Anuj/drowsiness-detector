@@ -393,6 +393,34 @@ show_landmarks = st.sidebar.checkbox("Show Eye & Mouth Meshes", value=True)
 show_boxes = st.sidebar.checkbox("Show Crop Bounding Boxes", value=True)
 show_hud = st.sidebar.checkbox("Show Telemetry HUD on Video", value=True)
 
+with st.sidebar.expander("🌐 WebRTC & STUN / TURN Settings"):
+    st.markdown("""
+    **Active Public STUN Relays:**
+    - `Google Public STUN (Port 19302)`
+    - `Cloudflare STUN (Port 3478)`
+    """)
+    custom_metered_key = st.text_input(
+        "Metered.ca API Key (Optional)",
+        type="password",
+        help="Optional: If your mobile network or corporate firewall blocks direct P2P UDP, enter a free Metered.ca API key for TURN relay traversal.",
+    )
+    if st.button("🔍 Test STUN Connectivity"):
+        with st.spinner("Pinging STUN servers..."):
+            import socket
+            results = []
+            for s_host, s_port in [("stun.l.google.com", 19302), ("stun.cloudflare.com", 3478)]:
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.settimeout(2.0)
+                    s.sendto(b"\x00\x01\x00\x00\x21\x12\xa4\x42" + b"\x00" * 12, (s_host, s_port))
+                    data, _ = s.recvfrom(512)
+                    results.append(f"✓ {s_host}:{s_port} - Online ({len(data)}B)")
+                except Exception as ex:
+                    results.append(f"✗ {s_host}:{s_port} - Failed ({ex})")
+                finally:
+                    s.close()
+            st.success("STUN Diagnostics:\n" + "\n".join(results))
+
 
 # ---------------------------------------------------------
 # Video Processor (WebRTC Frame Pipeline)
@@ -417,6 +445,17 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
         self.prev_time = time.time()
         self.frame_count = 0
 
+        # Runtime adjustable attributes
+        self.detection_mode = "Hybrid (MediaPipe EAR/MAR + CNN Verification)"
+        self.ear_thresh = 0.21
+        self.ear_frames = 15
+        self.mar_thresh = 0.50
+        self.mar_frames = 12
+        self.cnn_conf_thresh = 0.60
+        self.show_landmarks = True
+        self.show_boxes = True
+        self.show_hud = True
+
     def _process_frame(self, img):
         frame_h, frame_w = img.shape[:2]
 
@@ -426,7 +465,9 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
         self.prev_time = curr_time
 
         rgb_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        rgb_frame.flags.writeable = False
         results = self.face_mesh.process(rgb_frame)
+        rgb_frame.flags.writeable = True
 
         alert_reason = None
         ear = 0.0
@@ -436,9 +477,9 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
         face_detected = False
 
         active_dl_model = None
-        if "Custom CNN" in detection_mode or "Hybrid" in detection_mode:
+        if "Custom CNN" in self.detection_mode or "Hybrid" in self.detection_mode:
             active_dl_model = cnn_model
-        elif "MobileNetV3" in detection_mode:
+        elif "MobileNetV3" in self.detection_mode:
             active_dl_model = mobilenet_model
 
         if results.multi_face_landmarks:
@@ -460,12 +501,11 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
             dl_yawning = False
 
             if active_dl_model is not None:
-                # Classify eyes
                 eye_preds = []
                 for c in [left_crop, right_crop]:
                     if c is not None and c.size > 0:
                         lbl, conf = classify_crop(active_dl_model, c)
-                        if conf >= cnn_conf_thresh:
+                        if conf >= self.cnn_conf_thresh:
                             eye_preds.append(lbl)
                 if eye_preds:
                     self.eye_history.append(max(set(eye_preds), key=eye_preds.count))
@@ -473,22 +513,21 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
                 if smoothed_eye == "Closed":
                     dl_eye_closed = True
 
-                # Classify mouth
                 if mouth_crop is not None and mouth_crop.size > 0:
                     lbl, conf = classify_crop(active_dl_model, mouth_crop)
-                    if conf >= cnn_conf_thresh:
+                    if conf >= self.cnn_conf_thresh:
                         self.mouth_history.append(lbl)
                 smoothed_mouth = max(set(self.mouth_history), key=self.mouth_history.count) if self.mouth_history else "no_yawn"
                 if smoothed_mouth == "yawn":
                     dl_yawning = True
 
             # 3. Decision Logic based on selected mode
-            if "Hybrid" in detection_mode:
-                is_eye_closed = (ear < ear_thresh) or dl_eye_closed
-                is_yawn = (mar > mar_thresh) or dl_yawning
-            elif "MediaPipe Geometry" in detection_mode:
-                is_eye_closed = ear < ear_thresh
-                is_yawn = mar > mar_thresh
+            if "Hybrid" in self.detection_mode:
+                is_eye_closed = (ear < self.ear_thresh) or dl_eye_closed
+                is_yawn = (mar > self.mar_thresh) or dl_yawning
+            elif "MediaPipe Geometry" in self.detection_mode:
+                is_eye_closed = ear < self.ear_thresh
+                is_yawn = mar > self.mar_thresh
             else:  # Pure Deep Learning mode
                 is_eye_closed = dl_eye_closed
                 is_yawn = dl_yawning
@@ -499,20 +538,20 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
 
             if is_eye_closed:
                 self.eye_closed_counter += 1
-                if self.eye_closed_counter >= ear_frames:
+                if self.eye_closed_counter >= self.ear_frames:
                     alert_reason = "Eyes Closed"
             else:
                 self.eye_closed_counter = 0
 
             if is_yawn:
                 self.yawn_counter += 1
-                if self.yawn_counter >= mar_frames:
+                if self.yawn_counter >= self.mar_frames:
                     alert_reason = "Yawning"
             else:
                 self.yawn_counter = 0
 
             # 4. Overlays & Annotations
-            if show_landmarks:
+            if self.show_landmarks:
                 for idx in LEFT_EYE_IDX + RIGHT_EYE_IDX:
                     pt = (int(landmarks[idx].x * frame_w), int(landmarks[idx].y * frame_h))
                     cv2.circle(img, pt, 2, (0, 255, 255), -1)
@@ -520,7 +559,7 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
                     pt = (int(landmarks[idx].x * frame_w), int(landmarks[idx].y * frame_h))
                     cv2.circle(img, pt, 2, (255, 0, 255), -1)
 
-            if show_boxes and active_dl_model is not None:
+            if self.show_boxes and active_dl_model is not None:
                 for box in [l_box, r_box]:
                     if box[2] > box[0] and box[3] > box[1]:
                         cv2.rectangle(img, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 1)
@@ -533,9 +572,7 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
 
         # 5. Alert Banner & Frame Glow
         if alert_reason:
-            # Red warning border
             cv2.rectangle(img, (0, 0), (frame_w - 1, frame_h - 1), (0, 0, 255), 8)
-            # Top warning banner
             cv2.rectangle(img, (0, 0), (frame_w, 60), (0, 0, 200), -1)
             cv2.putText(
                 img,
@@ -547,8 +584,7 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
                 2,
                 cv2.LINE_AA,
             )
-        elif show_hud:
-            # Top translucent HUD bar
+        elif self.show_hud:
             overlay = img.copy()
             cv2.rectangle(overlay, (0, 0), (frame_w, 45), (20, 24, 30), -1)
             cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
@@ -608,34 +644,180 @@ class DrowsinessVideoProcessor(VideoProcessorBase):
             processed_img = self._process_frame(img)
             return av.VideoFrame.from_ndarray(processed_img, format="bgr24")
         except Exception:
+            import traceback
+            traceback.print_exc()
             return frame
 
 
 # ---------------------------------------------------------
-# WebRTC Configuration (STUN & TURN servers for cloud deployment)
+# Static Image Analysis (for Snapshot Camera & Uploads)
 # ---------------------------------------------------------
-RTC_CONFIGURATION = RTCConfiguration({
-    "iceServers": [
+@st.cache_resource
+def get_shared_face_mesh():
+    mp_face_mesh = mp.solutions.face_mesh
+    return mp_face_mesh.FaceMesh(
+        max_num_faces=1,
+        refine_landmarks=True,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+
+
+def process_single_image(img, det_mode, ear_th, mar_th, cnn_th, show_lm, show_bx, show_hd):
+    face_mesh = get_shared_face_mesh()
+    frame_h, frame_w = img.shape[:2]
+    rgb_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb_frame)
+
+    alert_reason = None
+    ear = 0.0
+    mar = 0.0
+    eye_state = "Open"
+    mouth_state = "Normal"
+    face_detected = False
+
+    active_dl_model = None
+    if "Custom CNN" in det_mode or "Hybrid" in det_mode:
+        active_dl_model = cnn_model
+    elif "MobileNetV3" in det_mode:
+        active_dl_model = mobilenet_model
+
+    if results.multi_face_landmarks:
+        face_detected = True
+        landmarks = results.multi_face_landmarks[0].landmark
+
+        left_ear = calculate_ear(landmarks, LEFT_EYE_IDX, frame_w, frame_h)
+        right_ear = calculate_ear(landmarks, RIGHT_EYE_IDX, frame_w, frame_h)
+        ear = (left_ear + right_ear) / 2.0
+        mar = calculate_mar(landmarks, frame_w, frame_h)
+
+        left_crop, l_box = get_crop(img, landmarks, LEFT_EYE_IDX, frame_w, frame_h, padding=12)
+        right_crop, r_box = get_crop(img, landmarks, RIGHT_EYE_IDX, frame_w, frame_h, padding=12)
+        mouth_crop, m_box = get_crop(img, landmarks, MOUTH_BOX_IDX, frame_w, frame_h, padding=18)
+
+        dl_eye_closed = False
+        dl_yawning = False
+
+        if active_dl_model is not None:
+            eye_preds = []
+            for c in [left_crop, right_crop]:
+                if c is not None and c.size > 0:
+                    lbl, conf = classify_crop(active_dl_model, c)
+                    if conf >= cnn_th:
+                        eye_preds.append(lbl)
+            if eye_preds and eye_preds[0] == "Closed":
+                dl_eye_closed = True
+
+            if mouth_crop is not None and mouth_crop.size > 0:
+                lbl, conf = classify_crop(active_dl_model, mouth_crop)
+                if conf >= cnn_th and lbl == "yawn":
+                    dl_yawning = True
+
+        if "Hybrid" in det_mode:
+            is_eye_closed = (ear < ear_th) or dl_eye_closed
+            is_yawn = (mar > mar_th) or dl_yawning
+        elif "MediaPipe Geometry" in det_mode:
+            is_eye_closed = ear < ear_th
+            is_yawn = mar > mar_th
+        else:
+            is_eye_closed = dl_eye_closed
+            is_yawn = dl_yawning
+
+        eye_state = "Closed" if is_eye_closed else "Open"
+        mouth_state = "Yawning" if is_yawn else "Normal"
+
+        if is_eye_closed:
+            alert_reason = "Eyes Closed"
+        elif is_yawn:
+            alert_reason = "Yawning"
+
+        if show_lm:
+            for idx in LEFT_EYE_IDX + RIGHT_EYE_IDX:
+                pt = (int(landmarks[idx].x * frame_w), int(landmarks[idx].y * frame_h))
+                cv2.circle(img, pt, 2, (0, 255, 255), -1)
+            for idx in [TOP_LIP, BOTTOM_LIP, LEFT_MOUTH, RIGHT_MOUTH]:
+                pt = (int(landmarks[idx].x * frame_w), int(landmarks[idx].y * frame_h))
+                cv2.circle(img, pt, 2, (255, 0, 255), -1)
+
+        if show_bx and active_dl_model is not None:
+            for box in [l_box, r_box]:
+                if box[2] > box[0] and box[3] > box[1]:
+                    cv2.rectangle(img, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 1)
+            if m_box[2] > m_box[0] and m_box[3] > m_box[1]:
+                cv2.rectangle(img, (m_box[0], m_box[1]), (m_box[2], m_box[3]), (255, 200, 0), 1)
+
+    if alert_reason:
+        cv2.rectangle(img, (0, 0), (frame_w - 1, frame_h - 1), (0, 0, 255), 8)
+        cv2.rectangle(img, (0, 0), (frame_w, 60), (0, 0, 200), -1)
+        cv2.putText(
+            img,
+            f"DROWSINESS ALERT: {alert_reason.upper()}!",
+            (20, 42),
+            cv2.FONT_HERSHEY_DUPLEX,
+            1.0,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+    elif show_hd:
+        overlay = img.copy()
+        cv2.rectangle(overlay, (0, 0), (frame_w, 45), (20, 24, 30), -1)
+        cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
+        hud_text = f"EAR: {ear:.2f} ({eye_state})  |  MAR: {mar:.2f} ({mouth_state})"
+        status_color = (0, 255, 127) if face_detected else (100, 100, 255)
+        cv2.putText(
+            img,
+            hud_text,
+            (15, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            status_color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    return img, ear, mar, eye_state, mouth_state, face_detected, alert_reason
+
+
+# ---------------------------------------------------------
+# WebRTC Configuration (Reliable STUN & Optional TURN servers)
+# ---------------------------------------------------------
+def get_rtc_configuration(metered_key: str = ""):
+    ice_servers = [
         {"urls": ["stun:stun.l.google.com:19302"]},
         {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:openrelay.metered.ca:80"]},
-        {
-            "urls": ["turn:openrelay.metered.ca:80"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
-        },
-        {
-            "urls": ["turn:openrelay.metered.ca:443"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
-        },
-        {
-            "urls": ["turn:openrelay.metered.ca:443?transport=tcp"],
-            "username": "openrelayproject",
-            "credential": "openrelayproject",
-        },
+        {"urls": ["stun:stun2.l.google.com:19302"]},
+        {"urls": ["stun:stun3.l.google.com:19302"]},
+        {"urls": ["stun:stun4.l.google.com:19302"]},
+        {"urls": ["stun:stun.cloudflare.com:3478"]},
     ]
-})
+
+    key = metered_key.strip()
+    if not key:
+        try:
+            key = str(st.secrets.get("METERED_API_KEY", "")).strip()
+        except Exception:
+            key = ""
+    if not key:
+        key = os.environ.get("METERED_API_KEY", "").strip()
+
+    if key:
+        try:
+            import json
+            import urllib.request
+            req = urllib.request.Request(
+                f"https://metered.ca/api/v1/turn/credentials?apiKey={key}",
+                headers={"User-Agent": "SafeDriveAI-Streamlit"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read().decode())
+                if isinstance(data, list):
+                    ice_servers.extend(data)
+        except Exception:
+            pass
+
+    return RTCConfiguration({"iceServers": ice_servers})
+
 
 # ---------------------------------------------------------
 # Main UI Layout
@@ -716,27 +898,126 @@ with col_video:
         unsafe_allow_html=True,
     )
 
-    webrtc_ctx = webrtc_streamer(
-        key="drowsiness-detection",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIGURATION,
-        video_processor_factory=DrowsinessVideoProcessor,
-        media_stream_constraints={
-            "video": {
-                "width": {"ideal": 640},
-                "height": {"ideal": 480},
-            },
-            "audio": False,
-        },
-        async_processing=True,
+    camera_mode = st.radio(
+        "Camera Mode",
+        ["🎥 Real-Time WebRTC Stream", "📸 Snapshot Photo Camera (Zero-Network Fallback)", "📁 Upload Image"],
+        horizontal=True,
+        label_visibility="collapsed",
     )
 
-    if webrtc_ctx.state.playing:
-        st.markdown("<span style='color: #3fb950; font-weight: 600;'>🟢 Camera Connected & Live</span>", unsafe_allow_html=True)
-    elif webrtc_ctx.state.signalling:
-        st.markdown("<span style='color: #e3b341; font-weight: 600;'>🟡 Negotiating WebRTC connection... Please allow camera access in browser if prompted.</span>", unsafe_allow_html=True)
-    else:
-        st.caption("Click **START** above to activate your camera. (Ensure camera permission is allowed in your browser).")
+    if camera_mode == "🎥 Real-Time WebRTC Stream":
+        rtc_cfg = get_rtc_configuration(custom_metered_key)
+        webrtc_ctx = webrtc_streamer(
+            key="drowsiness-detection",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=rtc_cfg,
+            video_processor_factory=DrowsinessVideoProcessor,
+            media_stream_constraints={
+                "video": {
+                    "width": {"ideal": 640},
+                    "height": {"ideal": 480},
+                    "frameRate": {"ideal": 30},
+                },
+                "audio": False,
+            },
+            video_html_attrs={
+                "autoPlay": True,
+                "controls": False,
+                "style": {"width": "100%", "borderRadius": "10px"},
+                "muted": True,
+            },
+            async_processing=True,
+        )
+
+        if webrtc_ctx.video_processor:
+            webrtc_ctx.video_processor.detection_mode = detection_mode
+            webrtc_ctx.video_processor.ear_thresh = ear_thresh
+            webrtc_ctx.video_processor.ear_frames = ear_frames
+            webrtc_ctx.video_processor.mar_thresh = mar_thresh
+            webrtc_ctx.video_processor.mar_frames = mar_frames
+            webrtc_ctx.video_processor.cnn_conf_thresh = cnn_conf_thresh
+            webrtc_ctx.video_processor.show_landmarks = show_landmarks
+            webrtc_ctx.video_processor.show_boxes = show_boxes
+            webrtc_ctx.video_processor.show_hud = show_hud
+
+        if webrtc_ctx.state.playing:
+            st.markdown("<span style='color: #3fb950; font-weight: 600;'>🟢 Camera Connected & Real-Time Monitoring Active</span>", unsafe_allow_html=True)
+        elif webrtc_ctx.state.signalling:
+            st.markdown("<span style='color: #e3b341; font-weight: 600;'>🟡 Negotiating WebRTC peer connection... Please allow browser camera access.</span>", unsafe_allow_html=True)
+        else:
+            st.caption("👉 Click **START** above to launch the real-time webcam feed. (If camera access prompt appears, click **Allow**).")
+
+        with st.expander("🛠️ Camera Troubleshooting & Quick Help"):
+            st.markdown("""
+            - **Camera shows black screen / spinner?**
+              1. **Check browser permissions**: Click the site settings icon (padlock/tune) in your browser address bar and verify **Camera** is set to **Allow**.
+              2. **Check device lock**: Ensure no other program (Zoom, Teams, another tab) is actively using your camera.
+              3. **Network NAT / Firewall blockage**: If your corporate firewall or cellular network blocks direct WebRTC UDP peer connections, switch to **'📸 Snapshot Photo Camera'** above for zero-firewall instant detection!
+            - **Audio alarm not sounding?** Click the green **'Arm / Test Audio Siren'** button above to unlock in-browser audio autoplay.
+            """)
+
+    elif camera_mode == "📸 Snapshot Photo Camera (Zero-Network Fallback)":
+        st.caption("Instant capture mode works reliably on any browser and network without WebRTC firewall restrictions.")
+        photo = st.camera_input("Capture Driver Snapshot")
+        if photo is not None:
+            bytes_data = photo.getvalue()
+            img_arr = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+            if img_arr is not None:
+                proc_img, ear, mar, eye_state, mouth_state, face_detected, alert_reason = process_single_image(
+                    img_arr, detection_mode, ear_thresh, mar_thresh, cnn_conf_thresh, show_landmarks, show_boxes, show_hud
+                )
+                with shared_state.lock:
+                    shared_state.ear = ear
+                    shared_state.mar = mar
+                    shared_state.eye_state = eye_state
+                    shared_state.mouth_state = mouth_state
+                    shared_state.face_detected = face_detected
+                    shared_state.fps = 30.0
+                    if alert_reason:
+                        shared_state.alert_active = True
+                        shared_state.alert_reason = alert_reason
+                        shared_state.status = f"Alert: {alert_reason}"
+                        shared_state.total_alerts += 1
+                        shared_state.event_log.append({
+                            "Time": datetime.now().strftime("%H:%M:%S"),
+                            "Event": f"Drowsiness Alert: {alert_reason}",
+                            "EAR": f"{ear:.3f}",
+                            "MAR": f"{mar:.3f}",
+                        })
+                    else:
+                        shared_state.alert_active = False
+                        shared_state.alert_reason = ""
+                        shared_state.status = "Normal" if face_detected else "No Face Detected"
+
+                rgb_display = cv2.cvtColor(proc_img, cv2.COLOR_BGR2RGB)
+                st.image(rgb_display, caption="Analyzed Driver Snapshot", use_container_width=True)
+
+    else:  # Upload Image
+        uploaded_file = st.file_uploader("Upload driver face image", type=["jpg", "jpeg", "png"])
+        if uploaded_file is not None:
+            bytes_data = uploaded_file.getvalue()
+            img_arr = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+            if img_arr is not None:
+                proc_img, ear, mar, eye_state, mouth_state, face_detected, alert_reason = process_single_image(
+                    img_arr, detection_mode, ear_thresh, mar_thresh, cnn_conf_thresh, show_landmarks, show_boxes, show_hud
+                )
+                with shared_state.lock:
+                    shared_state.ear = ear
+                    shared_state.mar = mar
+                    shared_state.eye_state = eye_state
+                    shared_state.mouth_state = mouth_state
+                    shared_state.face_detected = face_detected
+                    if alert_reason:
+                        shared_state.alert_active = True
+                        shared_state.alert_reason = alert_reason
+                        shared_state.status = f"Alert: {alert_reason}"
+                    else:
+                        shared_state.alert_active = False
+                        shared_state.alert_reason = ""
+                        shared_state.status = "Normal" if face_detected else "No Face Detected"
+
+                rgb_display = cv2.cvtColor(proc_img, cv2.COLOR_BGR2RGB)
+                st.image(rgb_display, caption="Analyzed Image", use_container_width=True)
 
 
 with col_telemetry:
