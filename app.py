@@ -17,6 +17,7 @@ import mediapipe as mp
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -145,8 +146,10 @@ st.markdown(
 ALARM_FILE = "alarm.wav"
 if os.path.exists(ALARM_FILE):
     with open(ALARM_FILE, "rb") as f:
-        ALARM_B64 = base64.b64encode(f.read()).decode("utf-8")
+        ALARM_BYTES = f.read()
+        ALARM_B64 = base64.b64encode(ALARM_BYTES).decode("utf-8")
 else:
+    ALARM_BYTES = b""
     ALARM_B64 = ""
 
 # ---------------------------------------------------------
@@ -420,6 +423,14 @@ with st.sidebar.expander("🌐 WebRTC & STUN / TURN Settings"):
                 finally:
                     s.close()
             st.success("STUN Diagnostics:\n" + "\n".join(results))
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔊 Audio Siren Controls")
+enable_audio_alarm = st.sidebar.checkbox("Enable In-Browser Audio Alarm", value=True)
+if st.sidebar.button("🔔 Test Audio Siren Now"):
+    if ALARM_BYTES:
+        st.sidebar.audio(ALARM_BYTES, format="audio/wav", autoplay=True)
+    st.sidebar.success("Playing test audio siren!")
 
 
 # ---------------------------------------------------------
@@ -780,6 +791,156 @@ def process_single_image(img, det_mode, ear_th, mar_th, cnn_th, show_lm, show_bx
 
 
 # ---------------------------------------------------------
+# In-Browser Audio Siren Component
+# ---------------------------------------------------------
+def render_audio_siren(alert_active: bool, alert_reason: str, enabled: bool = True):
+    if not enabled:
+        return
+
+    active_js_val = "true" if alert_active else "false"
+    bg_style = "rgba(248, 81, 73, 0.25)" if alert_active else "rgba(22, 27, 34, 0.7)"
+    border_style = "#f85149" if alert_active else "rgba(48, 54, 61, 0.6)"
+    text_color = "#ff7b72" if alert_active else "#8b949e"
+    pulse_anim = "pulse-siren 0.8s infinite" if alert_active else "none"
+    title_text = f"🚨 SIREN TRIGGERED: {alert_reason.upper()}!" if alert_active else "🔊 Audio Siren: ARMED & READY"
+    btn_text = "🔇 MUTE SIREN" if alert_active else "🔔 Test Siren"
+    btn_bg = "#f85149" if alert_active else "#238636"
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #e6edf3;
+            overflow: hidden;
+        }}
+        .siren-box {{
+            background: {bg_style};
+            border: 1px solid {border_style};
+            border-radius: 10px;
+            padding: 8px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            animation: {pulse_anim};
+            box-sizing: border-box;
+            height: 46px;
+        }}
+        @keyframes pulse-siren {{
+            0% {{ box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.7); }}
+            70% {{ box-shadow: 0 0 0 10px rgba(248, 81, 73, 0); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(248, 81, 73, 0); }}
+        }}
+        .siren-title {{
+            font-size: 13px;
+            font-weight: 700;
+            color: {text_color};
+            letter-spacing: 0.5px;
+        }}
+        .siren-btn {{
+            background: {btn_bg};
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }}
+        .siren-btn:hover {{
+            filter: brightness(1.15);
+        }}
+    </style>
+    </head>
+    <body>
+        <div class="siren-box">
+            <span class="siren-title">{title_text}</span>
+            <button id="sirenBtn" class="siren-btn" onclick="handleClick()">{btn_text}</button>
+        </div>
+
+        <audio id="alarmAudio" preload="auto" loop src="data:audio/wav;base64,{ALARM_B64}"></audio>
+
+        <script>
+            let muted = false;
+            const audio = document.getElementById('alarmAudio');
+            const alertActive = {active_js_val};
+
+            function playWebAudioChime() {{
+                try {{
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (!AudioContext) return;
+                    const ctx = new AudioContext();
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(900, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(1400, ctx.currentTime + 0.25);
+                    osc.frequency.exponentialRampToValueAtTime(900, ctx.currentTime + 0.5);
+                    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.5);
+                }} catch(e) {{
+                    console.error('AudioContext error:', e);
+                }}
+            }}
+
+            function handleClick() {{
+                if (alertActive) {{
+                    muted = true;
+                    if (audio) audio.pause();
+                    document.getElementById('sirenBtn').innerText = 'MUTED';
+                    document.getElementById('sirenBtn').style.background = '#6e7681';
+                }} else {{
+                    if (audio) {{
+                        audio.currentTime = 0;
+                        audio.play().then(() => {{
+                            document.getElementById('sirenBtn').innerText = 'Audio Ready ✓';
+                            document.getElementById('sirenBtn').style.background = '#1f6feb';
+                            setTimeout(() => {{
+                                audio.pause();
+                                audio.currentTime = 0;
+                            }}, 1000);
+                        }}).catch(() => {{
+                            playWebAudioChime();
+                            document.getElementById('sirenBtn').innerText = 'Synth Ready ✓';
+                        }});
+                    }} else {{
+                        playWebAudioChime();
+                    }}
+                }}
+            }}
+
+            if (alertActive && !muted) {{
+                if (audio) {{
+                    audio.play().catch(e => {{
+                        console.log('Audio autoplay prevented, using WebAudio fallback:', e);
+                        playWebAudioChime();
+                    }});
+                }} else {{
+                    playWebAudioChime();
+                }}
+            }} else {{
+                if (audio && !audio.paused) {{
+                    audio.pause();
+                    audio.currentTime = 0;
+                }}
+            }}
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=52)
+
+
+# ---------------------------------------------------------
 # WebRTC Configuration (Reliable STUN & Optional TURN servers)
 # ---------------------------------------------------------
 def get_rtc_configuration(metered_key: str = ""):
@@ -845,58 +1006,6 @@ col_video, col_telemetry = st.columns([1.35, 1.0], gap="medium")
 
 with col_video:
     st.subheader("📹 Real-Time In-Browser Camera")
-
-    # In-Browser Audio Player & Siren Trigger
-    st.markdown(
-        f"""
-    <div style="background: rgba(22, 27, 34, 0.7); border: 1px solid rgba(48, 54, 61, 0.6); padding: 10px 16px; border-radius: 10px; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
-        <span style="font-size: 13px; color: #8b949e;">🔊 Browser Audio Alarm</span>
-        <button id="sirenBtn" onclick="testAlarm()" style="background: #238636; color: white; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;">
-            Arm / Test Audio Siren
-        </button>
-    </div>
-
-    <audio id="alarmAudio" preload="auto" loop>
-        <source src="data:audio/wav;base64,{ALARM_B64}" type="audio/wav">
-    </audio>
-
-    <script>
-    let audioArmed = false;
-    const alarm = document.getElementById('alarmAudio');
-
-    function testAlarm() {{
-        if (!alarm) return;
-        alarm.currentTime = 0;
-        alarm.play().then(() => {{
-            audioArmed = true;
-            document.getElementById('sirenBtn').innerText = 'Audio Armed & Ready ✓';
-            document.getElementById('sirenBtn').style.background = '#1f6feb';
-            setTimeout(() => {{
-                alarm.pause();
-                alarm.currentTime = 0;
-            }}, 800);
-        }}).catch(err => {{
-            console.log('Audio autoplay prevented:', err);
-        }});
-    }}
-
-    window.triggerBrowserAlarm = function(play) {{
-        if (!alarm) return;
-        if (play) {{
-            if (alarm.paused) {{
-                alarm.play().catch(e => console.log('Autoplay policy error:', e));
-            }}
-        }} else {{
-            if (!alarm.paused) {{
-                alarm.pause();
-                alarm.currentTime = 0;
-            }}
-        }}
-    }};
-    </script>
-    """,
-        unsafe_allow_html=True,
-    )
 
     camera_mode = st.radio(
         "Camera Mode",
@@ -1039,6 +1148,9 @@ with col_telemetry:
             total_alerts = shared_state.total_alerts
             events = list(reversed(shared_state.event_log[-10:]))
 
+        # Audio Siren Alert Component (plays automatically on drowsiness)
+        render_audio_siren(alert_active, alert_reason, enable_audio_alarm)
+
         # Status Badge
         if alert_active:
             st.markdown(
@@ -1046,21 +1158,18 @@ with col_telemetry:
             <div class="status-badge-alert">
                 ⚠️ DROWSINESS DETECTED: {alert_reason.upper()}
             </div>
-            <script>
-            if (window.triggerBrowserAlarm) window.triggerBrowserAlarm(true);
-            </script>
             """,
                 unsafe_allow_html=True,
             )
+            # Dual redundancy: native Streamlit audio player with autoplay
+            if enable_audio_alarm and ALARM_BYTES:
+                st.audio(ALARM_BYTES, format="audio/wav", loop=True, autoplay=True)
         elif not face_detected:
             st.markdown(
                 """
             <div class="status-badge-warn">
                 👤 NO FACE DETECTED
             </div>
-            <script>
-            if (window.triggerBrowserAlarm) window.triggerBrowserAlarm(false);
-            </script>
             """,
                 unsafe_allow_html=True,
             )
@@ -1070,9 +1179,6 @@ with col_telemetry:
             <div class="status-badge-safe">
                 ✓ DRIVER ALERT & ATTENTIVE
             </div>
-            <script>
-            if (window.triggerBrowserAlarm) window.triggerBrowserAlarm(false);
-            </script>
             """,
                 unsafe_allow_html=True,
             )
