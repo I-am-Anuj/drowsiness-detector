@@ -29,7 +29,6 @@ from torchvision import models, transforms
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="SafeDrive AI | Driver Drowsiness Detector",
-    page_icon="🚗",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -396,7 +395,7 @@ show_landmarks = st.sidebar.checkbox("Show Eye & Mouth Meshes", value=True)
 show_boxes = st.sidebar.checkbox("Show Crop Bounding Boxes", value=True)
 show_hud = st.sidebar.checkbox("Show Telemetry HUD on Video", value=True)
 
-with st.sidebar.expander("🌐 WebRTC & STUN / TURN Settings"):
+with st.sidebar.expander("WebRTC & STUN / TURN Settings"):
     st.markdown("""
     **Active Public STUN Relays:**
     - `Google Public STUN (Port 19302)`
@@ -407,7 +406,7 @@ with st.sidebar.expander("🌐 WebRTC & STUN / TURN Settings"):
         type="password",
         help="Optional: If your mobile network or corporate firewall blocks direct P2P UDP, enter a free Metered.ca API key for TURN relay traversal.",
     )
-    if st.button("🔍 Test STUN Connectivity"):
+    if st.button("Test STUN Connectivity"):
         with st.spinner("Pinging STUN servers..."):
             import socket
             results = []
@@ -417,20 +416,20 @@ with st.sidebar.expander("🌐 WebRTC & STUN / TURN Settings"):
                     s.settimeout(2.0)
                     s.sendto(b"\x00\x01\x00\x00\x21\x12\xa4\x42" + b"\x00" * 12, (s_host, s_port))
                     data, _ = s.recvfrom(512)
-                    results.append(f"✓ {s_host}:{s_port} - Online ({len(data)}B)")
+                    results.append(f"[OK] {s_host}:{s_port} - Online ({len(data)}B)")
                 except Exception as ex:
-                    results.append(f"✗ {s_host}:{s_port} - Failed ({ex})")
+                    results.append(f"[FAIL] {s_host}:{s_port} - Failed ({ex})")
                 finally:
                     s.close()
             st.success("STUN Diagnostics:\n" + "\n".join(results))
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔊 Audio Siren Controls")
+st.sidebar.subheader("Audio Alarm Controls")
 enable_audio_alarm = st.sidebar.checkbox("Enable In-Browser Audio Alarm", value=True)
-if st.sidebar.button("🔔 Test Audio Siren Now"):
+if st.sidebar.button("Test Audio Alarm"):
     if ALARM_BYTES:
         st.sidebar.audio(ALARM_BYTES, format="audio/wav", autoplay=True)
-    st.sidebar.success("Playing test audio siren!")
+    st.sidebar.success("Audio alarm test triggered.")
 
 
 # ---------------------------------------------------------
@@ -802,8 +801,8 @@ def render_audio_siren(alert_active: bool, alert_reason: str, enabled: bool = Tr
     border_style = "#f85149" if alert_active else "rgba(48, 54, 61, 0.6)"
     text_color = "#ff7b72" if alert_active else "#8b949e"
     pulse_anim = "pulse-siren 0.8s infinite" if alert_active else "none"
-    title_text = f"🚨 SIREN TRIGGERED: {alert_reason.upper()}!" if alert_active else "🔊 Audio Siren: ARMED & READY"
-    btn_text = "🔇 MUTE SIREN" if alert_active else "🔔 Test Siren"
+    title_text = f"ALERT: {alert_reason.upper()}!" if alert_active else "Audio Alarm: Armed & Active"
+    btn_text = "Mute Alarm" if alert_active else "Test Alarm Sound"
     btn_bg = "#f85149" if alert_active else "#238636"
 
     html_code = f"""
@@ -902,7 +901,7 @@ def render_audio_siren(alert_active: bool, alert_reason: str, enabled: bool = Tr
                     if (audio) {{
                         audio.currentTime = 0;
                         audio.play().then(() => {{
-                            document.getElementById('sirenBtn').innerText = 'Audio Ready ✓';
+                            document.getElementById('sirenBtn').innerText = 'Audio Ready';
                             document.getElementById('sirenBtn').style.background = '#1f6feb';
                             setTimeout(() => {{
                                 audio.pause();
@@ -910,7 +909,7 @@ def render_audio_siren(alert_active: bool, alert_reason: str, enabled: bool = Tr
                             }}, 1000);
                         }}).catch(() => {{
                             playWebAudioChime();
-                            document.getElementById('sirenBtn').innerText = 'Synth Ready ✓';
+                            document.getElementById('sirenBtn').innerText = 'Synth Ready';
                         }});
                     }} else {{
                         playWebAudioChime();
@@ -1005,16 +1004,16 @@ st.markdown(
 col_video, col_telemetry = st.columns([1.35, 1.0], gap="medium")
 
 with col_video:
-    st.subheader("📹 Real-Time In-Browser Camera")
+    st.subheader("Driver Camera Feed")
 
     camera_mode = st.radio(
         "Camera Mode",
-        ["🎥 Real-Time WebRTC Stream", "📸 Snapshot Photo Camera (Zero-Network Fallback)", "📁 Upload Image"],
+        ["Live WebRTC Camera", "Snapshot Photo Camera", "Upload Image File"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-    if camera_mode == "🎥 Real-Time WebRTC Stream":
+    if camera_mode == "Live WebRTC Camera":
         rtc_cfg = get_rtc_configuration(custom_metered_key)
         webrtc_ctx = webrtc_streamer(
             key="drowsiness-detection",
@@ -1050,22 +1049,21 @@ with col_video:
             webrtc_ctx.video_processor.show_hud = show_hud
 
         if webrtc_ctx.state.playing:
-            st.markdown("<span style='color: #3fb950; font-weight: 600;'>🟢 Camera Connected & Real-Time Monitoring Active</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color: #3fb950; font-weight: 600;'>Camera connected and active</span>", unsafe_allow_html=True)
         elif webrtc_ctx.state.signalling:
-            st.markdown("<span style='color: #e3b341; font-weight: 600;'>🟡 Negotiating WebRTC peer connection... Please allow browser camera access.</span>", unsafe_allow_html=True)
+            st.markdown("<span style='color: #e3b341; font-weight: 600;'>Negotiating WebRTC connection. Please allow camera permissions if prompted.</span>", unsafe_allow_html=True)
         else:
-            st.caption("👉 Click **START** above to launch the real-time webcam feed. (If camera access prompt appears, click **Allow**).")
+            st.caption("Click **START** above to launch the webcam feed. If prompted, allow camera access in your browser.")
 
-        with st.expander("🛠️ Camera Troubleshooting & Quick Help"):
+        with st.expander("Camera Troubleshooting & Help"):
             st.markdown("""
-            - **Camera shows black screen / spinner?**
-              1. **Check browser permissions**: Click the site settings icon (padlock/tune) in your browser address bar and verify **Camera** is set to **Allow**.
-              2. **Check device lock**: Ensure no other program (Zoom, Teams, another tab) is actively using your camera.
-              3. **Network NAT / Firewall blockage**: If your corporate firewall or cellular network blocks direct WebRTC UDP peer connections, switch to **'📸 Snapshot Photo Camera'** above for zero-firewall instant detection!
-            - **Audio alarm not sounding?** Click the green **'Arm / Test Audio Siren'** button above to unlock in-browser audio autoplay.
+            - **Camera shows black screen or loading?**
+              1. **Check browser permissions**: Click the site settings icon in your browser address bar and verify **Camera** is set to **Allow**.
+              2. **Check device lock**: Ensure no other application (Zoom, Teams, another tab) is actively using your camera.
+              3. **Network NAT / Firewall blockage**: If your corporate firewall or cellular network blocks direct WebRTC UDP peer connections, switch to **'Snapshot Photo Camera'** above for zero-firewall instant detection.
             """)
 
-    elif camera_mode == "📸 Snapshot Photo Camera (Zero-Network Fallback)":
+    elif camera_mode == "Snapshot Photo Camera":
         st.caption("Instant capture mode works reliably on any browser and network without WebRTC firewall restrictions.")
         photo = st.camera_input("Capture Driver Snapshot")
         if photo is not None:
@@ -1130,7 +1128,7 @@ with col_video:
 
 
 with col_telemetry:
-    st.subheader("📊 Driver Telemetry & Status")
+    st.subheader("Driver Telemetry & Status")
 
     # Reactive metrics fragment refreshing every 1.5 seconds without re-rendering the WebRTC video
     @st.fragment(run_every=1.5)
@@ -1156,7 +1154,7 @@ with col_telemetry:
             st.markdown(
                 f"""
             <div class="status-badge-alert">
-                ⚠️ DROWSINESS DETECTED: {alert_reason.upper()}
+                DROWSINESS DETECTED: {alert_reason.upper()}
             </div>
             """,
                 unsafe_allow_html=True,
@@ -1168,7 +1166,7 @@ with col_telemetry:
             st.markdown(
                 """
             <div class="status-badge-warn">
-                👤 NO FACE DETECTED
+                NO FACE DETECTED
             </div>
             """,
                 unsafe_allow_html=True,
@@ -1177,7 +1175,7 @@ with col_telemetry:
             st.markdown(
                 """
             <div class="status-badge-safe">
-                ✓ DRIVER ALERT & ATTENTIVE
+                DRIVER ALERT & ATTENTIVE
             </div>
             """,
                 unsafe_allow_html=True,
@@ -1248,7 +1246,7 @@ with col_telemetry:
         st.markdown("<div style='height: 14px;'></div>", unsafe_allow_html=True)
 
         # Event Log Table
-        st.markdown("##### 📜 Recent Detection Event Log")
+        st.markdown("##### Recent Detection Events")
         if events:
             df_log = pd.DataFrame(events)
             st.dataframe(df_log, use_container_width=True, hide_index=True)
@@ -1264,7 +1262,7 @@ with col_telemetry:
 # Model Performance & Reference Section
 # ---------------------------------------------------------
 st.markdown("---")
-with st.expander("📈 Model Architecture & Training Evaluation Benchmarks"):
+with st.expander("Model Architecture & Benchmark Metrics"):
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown("**Custom CNN Baseline**")
